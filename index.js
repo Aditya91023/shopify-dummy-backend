@@ -2,6 +2,7 @@ import express from "express";
 import axios from "axios";
 import crypto from "crypto";
 import dotenv from "dotenv";
+import { readDB, writeDB } from "./store.js";
 
 dotenv.config();
 
@@ -13,20 +14,47 @@ const {
   SHOPIFY_API_SECRET,
   SCOPES,
   HOST,
-  PORT
+  PORT = 3000,
 } = process.env;
 
-// 1️⃣ App entry
+/* ======================================================
+   🔐 HMAC VERIFICATION (MANDATORY)
+====================================================== */
+function verifyHmac(query) {
+  const { hmac, ...rest } = query;
+
+  const message = Object.keys(rest)
+    .sort()
+    .map((key) => `${key}=${rest[key]}`)
+    .join("&");
+
+  const generatedHmac = crypto
+    .createHmac("sha256", SHOPIFY_API_SECRET)
+    .update(message)
+    .digest("hex");
+
+  return generatedHmac === hmac;
+}
+
+/* ======================================================
+   🏠 APP ENTRY
+====================================================== */
 app.get("/", (req, res) => {
   res.send("Shopify Dummy App Backend is running ✅");
 });
 
-// 2️⃣ Start OAuth
+/* ======================================================
+   🔑 START OAUTH
+====================================================== */
 app.get("/auth", (req, res) => {
-  const shop = req.query.shop;
-  if (!shop) return res.status(400).send("Missing shop parameter");
+  const { shop } = req.query;
+
+  if (!shop) {
+    return res.status(400).send("Missing shop parameter");
+  }
 
   const redirectUri = `${HOST}/auth/callback`;
+
   const installUrl =
     `https://${shop}/admin/oauth/authorize` +
     `?client_id=${SHOPIFY_API_KEY}` +
@@ -36,11 +64,18 @@ app.get("/auth", (req, res) => {
   res.redirect(installUrl);
 });
 
-// 3️⃣ OAuth callback
+/* ======================================================
+   🔁 OAUTH CALLBACK
+====================================================== */
 app.get("/auth/callback", async (req, res) => {
   const { shop, code } = req.query;
 
+  if (!verifyHmac(req.query)) {
+    return res.status(400).send("HMAC validation failed ❌");
+  }
+
   try {
+    // Exchange code for access token
     const tokenResponse = await axios.post(
       `https://${shop}/admin/oauth/access_token`,
       {
@@ -52,24 +87,35 @@ app.get("/auth/callback", async (req, res) => {
 
     const accessToken = tokenResponse.data.access_token;
 
-    // 🔹 Dummy storage (for now)
-    console.log("Store:", shop);
-    console.log("Access Token:", accessToken);
+    // Store token in file DB
+    const db = readDB();
 
-    res.send("✅ App installed successfully. You can close this window.");
+    db[shop] = {
+      access_token: accessToken,
+      scope: SCOPES,
+      installed_at: new Date().toISOString(),
+    };
+
+    writeDB(db);
+
+    // Redirect back to Shopify Admin (embedded app)
+    res.redirect(`https://${shop}/admin/apps/${SHOPIFY_API_KEY}`);
   } catch (error) {
-    console.error(error);
+    console.error("OAuth Error:", error.response?.data || error.message);
     res.status(500).send("OAuth failed");
   }
 });
 
-// 4️⃣ Dummy API call (REAL Shopify API usage)
-app.get("/api/store-info", async (req, res) => {
-  res.json({
-    message: "This endpoint will fetch store info later",
-  });
+/* ======================================================
+   🧪 DEBUG ROUTE (TEMPORARY – REMOVE BEFORE PUBLISH)
+====================================================== */
+app.get("/debug/shops", (req, res) => {
+  res.json(readDB());
 });
 
+/* ======================================================
+   🚀 START SERVER
+====================================================== */
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
