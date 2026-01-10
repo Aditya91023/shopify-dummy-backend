@@ -99,21 +99,31 @@ app.use((req, res, next) => {
    🏠 ROOT - Health Check
 ====================================================== */
 app.get("/", (req, res) => {
-  res.send(`
-    <!DOCTYPE html>
-    <html>
-      <head>
-        <meta charset="UTF-8">
-        <title>Shopify App</title>
-      </head>
-      <body>
-        <h1>✅ Shopify App Backend Running</h1>
-        <p>Status: Active</p>
-        <p>Time: ${new Date().toISOString()}</p>
-      </body>
-    </html>
-  `);
+  const { shop, embedded } = req.query;
+
+  if (!shop) {
+    return res.status(400).send("Missing shop parameter");
+  }
+
+  // ✅ If embedded, break out of iframe BEFORE OAuth
+  if (embedded === "1") {
+    return res.send(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <script>
+            window.top.location.href = "/auth?shop=${shop}";
+          </script>
+        </head>
+        <body></body>
+      </html>
+    `);
+  }
+
+  // Non-embedded fallback
+  res.redirect(`/auth?shop=${shop}`);
 });
+
 
 /* ======================================================
    🔑 START OAUTH
