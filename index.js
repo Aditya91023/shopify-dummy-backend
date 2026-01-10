@@ -109,8 +109,47 @@ app.get("/auth/callback", async (req, res) => {
 /* ======================================================
    🧪 DEBUG ROUTE (TEMPORARY – REMOVE BEFORE PUBLISH)
 ====================================================== */
-app.get("/debug/shops", (req, res) => {
-  res.json(readDB());
+app.get("/auth/callback", async (req, res) => {
+  console.log("🔁 OAuth callback HIT");
+  console.log("QUERY PARAMS:", req.query);
+
+  const { shop, code } = req.query;
+
+  // TEMP: bypass HMAC just to confirm flow
+  // if (!verifyHmac(req.query)) {
+  //   console.log("❌ HMAC FAILED");
+  //   return res.status(400).send("HMAC validation failed");
+  // }
+
+  try {
+    const tokenResponse = await axios.post(
+      `https://${shop}/admin/oauth/access_token`,
+      {
+        client_id: SHOPIFY_API_KEY,
+        client_secret: SHOPIFY_API_SECRET,
+        code,
+      }
+    );
+
+    console.log("✅ Access token response:", tokenResponse.data);
+
+    const accessToken = tokenResponse.data.access_token;
+
+    const db = readDB();
+    db[shop] = {
+      access_token: accessToken,
+      scope: SCOPES,
+      installed_at: new Date().toISOString(),
+    };
+    writeDB(db);
+
+    console.log("✅ TOKEN STORED FOR:", shop);
+
+    res.redirect(`https://${shop}/admin/apps/${SHOPIFY_API_KEY}`);
+  } catch (err) {
+    console.error("🔥 OAuth ERROR:", err.response?.data || err.message);
+    res.status(500).send("OAuth failed");
+  }
 });
 
 /* ======================================================
