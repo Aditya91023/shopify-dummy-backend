@@ -40,7 +40,14 @@ function verifyHmac(query) {
    🏠 ROOT
 ====================================================== */
 app.get("/", (req, res) => {
-  res.send("Shopify Dummy App Backend is running ✅");
+  const { shop } = req.query;
+
+  if (!shop) {
+    return res.send("Missing shop parameter");
+  }
+
+  // 🚀 START OAUTH
+  res.redirect(`/auth?shop=${shop}`);
 });
 
 /* ======================================================
