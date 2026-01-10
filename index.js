@@ -152,49 +152,46 @@ app.get("/auth", (req, res) => {
    🔁 OAUTH CALLBACK
 ====================================================== */
 app.get("/auth/callback", async (req, res) => {
-  const { shop, code, state, hmac } = req.query;
+  console.log("🔁 /auth/callback HIT");
+  console.log("QUERY PARAMS:", req.query);
 
-  console.log("📥 OAuth callback:", { shop, code: code ? "✓" : "✗", state: state ? "✓" : "✗", hmac: hmac ? "✓" : "✗" });
+  const { shop, code } = req.query;
 
   if (!shop || !code) {
-    console.error("❌ Missing shop or code");
-    return res.status(400).send("Missing required parameters");
-  }
-
-  if (!validateNonce(state)) {
-    console.error("❌ Invalid or expired nonce");
-    return res.status(403).send("Invalid request - nonce validation failed");
+    console.log("❌ Missing shop or code");
+    return res.status(400).send("Missing shop or code");
   }
 
   if (!verifyHmac(req.query)) {
-    console.error("❌ HMAC validation failed");
-    return res.status(403).send("HMAC validation failed");
+    console.log("❌ HMAC FAILED");
+    return res.status(400).send("HMAC failed");
   }
 
   try {
-    const tokenResponse = await axios.post(
+    const tokenRes = await axios.post(
       `https://${shop}/admin/oauth/access_token`,
       {
-        client_id: SHOPIFY_API_KEY,
-        client_secret: SHOPIFY_API_SECRET,
+        client_id: process.env.SHOPIFY_API_KEY,
+        client_secret: process.env.SHOPIFY_API_SECRET,
         code,
       }
     );
 
-    const { access_token, scope } = tokenResponse.data;
+    console.log("✅ Access token response:", tokenRes.data);
 
-    await saveShop(shop, access_token, scope);
+    const accessToken = tokenRes.data.access_token;
 
-    console.log(`✅ OAuth successful for: ${shop}`);
+    await saveShop(shop, accessToken, process.env.SCOPES);
 
-    await registerWebhooks(shop, access_token);
+    console.log("✅ TOKEN SAVED TO DB FOR:", shop);
 
-    res.redirect(`https://${shop}/admin/apps/${SHOPIFY_API_KEY}`);
+    res.redirect(`https://${shop}/admin/apps/${process.env.SHOPIFY_API_KEY}`);
   } catch (err) {
-    console.error("❌ OAuth error:", err.response?.data || err.message);
-    res.status(500).send("OAuth failed: " + (err.response?.data?.error_description || err.message));
+    console.error("🔥 OAUTH ERROR:", err.response?.data || err.message);
+    res.status(500).send("OAuth failed");
   }
 });
+
 
 /* ======================================================
    🪝 WEBHOOK REGISTRATION
