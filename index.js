@@ -2,23 +2,13 @@ import express from "express";
 import axios from "axios";
 import crypto from "crypto";
 import dotenv from "dotenv";
-import { readDB, writeDB } from "./store.js";
+import fs from "fs";
+import path from "path";
 
 dotenv.config();
 
 const app = express();
 app.use(express.json());
-
-/* ======================================================
-   🔐 REQUIRED CSP FOR SHOPIFY EMBEDDED APPS
-====================================================== */
-app.use((req, res, next) => {
-  res.setHeader(
-    "Content-Security-Policy",
-    "frame-ancestors https://admin.shopify.com https://*.myshopify.com"
-  );
-  next();
-});
 
 const {
   SHOPIFY_API_KEY,
@@ -29,7 +19,21 @@ const {
 } = process.env;
 
 /* ======================================================
-   🔐 HMAC VERIFICATION
+   📦 SIMPLE FILE DB
+====================================================== */
+const DB_PATH = path.join(process.cwd(), "db.json");
+
+function readDB() {
+  if (!fs.existsSync(DB_PATH)) return {};
+  return JSON.parse(fs.readFileSync(DB_PATH, "utf8"));
+}
+
+function writeDB(data) {
+  fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2));
+}
+
+/* ======================================================
+   🔐 HMAC VALIDATION
 ====================================================== */
 function verifyHmac(query) {
   const { hmac, ...rest } = query;
@@ -39,18 +43,27 @@ function verifyHmac(query) {
     .map((key) => `${key}=${rest[key]}`)
     .join("&");
 
-  const generatedHmac = crypto
+  const digest = crypto
     .createHmac("sha256", SHOPIFY_API_SECRET)
     .update(message)
     .digest("hex");
 
-  return generatedHmac === hmac;
+  return digest === hmac;
 }
 
 /* ======================================================
-   🏠 ROOT (EMBEDDED APP ENTRY POINT)
-   ✔ Uses Shopify App Bridge
-   ✔ Breaks out of iframe safely
+   🔒 CSP FOR EMBEDDED APPS
+====================================================== */
+app.use((req, res, next) => {
+  res.setHeader(
+    "Content-Security-Policy",
+    "frame-ancestors https://admin.shopify.com https://*.myshopify.com"
+  );
+  next();
+});
+
+/* ======================================================
+   🏠 ROOT (APP BRIDGE BOOTSTRAP)
 ====================================================== */
 app.get("/", (req, res) => {
   const { shop, host } = req.query;
@@ -63,14 +76,13 @@ app.get("/", (req, res) => {
     <!DOCTYPE html>
     <html>
       <head>
-        <meta charset="UTF-8" />
         <script src="https://unpkg.com/@shopify/app-bridge@3"></script>
         <script>
-          const AppBridge = window['app-bridge'];
-          const createApp = AppBridge.createApp;
-          const Redirect = AppBridge.actions.Redirect;
+          var AppBridge = window['app-bridge'];
+          var createApp = AppBridge.createApp;
+          var Redirect = AppBridge.actions.Redirect;
 
-          const app = createApp({
+          var app = createApp({
             apiKey: "${SHOPIFY_API_KEY}",
             host: "${host}",
             forceRedirect: true,
@@ -92,10 +104,7 @@ app.get("/", (req, res) => {
 ====================================================== */
 app.get("/auth", (req, res) => {
   const { shop } = req.query;
-
-  if (!shop) {
-    return res.status(400).send("Missing shop parameter");
-  }
+  if (!shop) return res.status(400).send("Missing shop");
 
   const redirectUri = `${HOST}/auth/callback`;
 
@@ -112,13 +121,9 @@ app.get("/auth", (req, res) => {
    🔁 OAUTH CALLBACK
 ====================================================== */
 app.get("/auth/callback", async (req, res) => {
-  console.log("🔁 OAuth callback HIT");
-  console.log("QUERY:", req.query);
-
   const { shop, code } = req.query;
 
   if (!verifyHmac(req.query)) {
-    console.log("❌ HMAC validation failed");
     return res.status(400).send("HMAC validation failed");
   }
 
@@ -142,17 +147,15 @@ app.get("/auth/callback", async (req, res) => {
     };
     writeDB(db);
 
-    console.log("✅ Token stored for:", shop);
-
     res.redirect(`https://${shop}/admin/apps/${SHOPIFY_API_KEY}`);
   } catch (err) {
-    console.error("🔥 OAuth error:", err.response?.data || err.message);
+    console.error(err.response?.data || err.message);
     res.status(500).send("OAuth failed");
   }
 });
 
 /* ======================================================
-   🧪 DEBUG ROUTE
+   🧪 DEBUG (OPTIONAL)
 ====================================================== */
 app.get("/debug/shops", (req, res) => {
   res.json(readDB());
