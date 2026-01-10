@@ -9,6 +9,9 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
+/* ======================================================
+   🔐 REQUIRED CSP FOR SHOPIFY EMBEDDED APPS
+====================================================== */
 app.use((req, res, next) => {
   res.setHeader(
     "Content-Security-Policy",
@@ -45,17 +48,43 @@ function verifyHmac(query) {
 }
 
 /* ======================================================
-   🏠 ROOT
+   🏠 ROOT (EMBEDDED APP ENTRY POINT)
+   ✔ Uses Shopify App Bridge
+   ✔ Breaks out of iframe safely
 ====================================================== */
 app.get("/", (req, res) => {
-  const { shop } = req.query;
+  const { shop, host } = req.query;
 
-  if (!shop) {
-    return res.send("Missing shop parameter");
+  if (!shop || !host) {
+    return res.status(400).send("Missing shop or host parameter");
   }
 
-  // 🚀 START OAUTH
-  res.redirect(`/auth?shop=${shop}`);
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="UTF-8" />
+        <script src="https://unpkg.com/@shopify/app-bridge@3"></script>
+        <script>
+          const AppBridge = window['app-bridge'];
+          const createApp = AppBridge.createApp;
+          const Redirect = AppBridge.actions.Redirect;
+
+          const app = createApp({
+            apiKey: "${SHOPIFY_API_KEY}",
+            host: "${host}",
+            forceRedirect: true,
+          });
+
+          Redirect.create(app).dispatch(
+            Redirect.Action.REMOTE,
+            "/auth?shop=${shop}"
+          );
+        </script>
+      </head>
+      <body></body>
+    </html>
+  `);
 });
 
 /* ======================================================
@@ -80,7 +109,7 @@ app.get("/auth", (req, res) => {
 });
 
 /* ======================================================
-   🔁 OAUTH CALLBACK (ONLY ONE!)
+   🔁 OAUTH CALLBACK
 ====================================================== */
 app.get("/auth/callback", async (req, res) => {
   console.log("🔁 OAuth callback HIT");
@@ -89,8 +118,8 @@ app.get("/auth/callback", async (req, res) => {
   const { shop, code } = req.query;
 
   if (!verifyHmac(req.query)) {
-    console.log("❌ HMAC FAILED");
-    return res.status(400).send("HMAC validation failed ❌");
+    console.log("❌ HMAC validation failed");
+    return res.status(400).send("HMAC validation failed");
   }
 
   try {
@@ -104,7 +133,6 @@ app.get("/auth/callback", async (req, res) => {
     );
 
     const accessToken = tokenResponse.data.access_token;
-    console.log("✅ Access token received");
 
     const db = readDB();
     db[shop] = {
@@ -124,7 +152,7 @@ app.get("/auth/callback", async (req, res) => {
 });
 
 /* ======================================================
-   🧪 DEBUG ROUTE (THIS WAS MISSING)
+   🧪 DEBUG ROUTE
 ====================================================== */
 app.get("/debug/shops", (req, res) => {
   res.json(readDB());
