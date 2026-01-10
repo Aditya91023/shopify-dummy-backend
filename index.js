@@ -9,6 +9,14 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
+app.use((req, res, next) => {
+  res.setHeader(
+    "Content-Security-Policy",
+    "frame-ancestors https://admin.shopify.com https://*.myshopify.com"
+  );
+  next();
+});
+
 const {
   SHOPIFY_API_KEY,
   SHOPIFY_API_SECRET,
