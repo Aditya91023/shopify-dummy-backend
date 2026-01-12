@@ -2,11 +2,28 @@ import express from "express";
 import axios from "axios";
 import crypto from "crypto";
 import dotenv from "dotenv";
+import cors from "cors";
 import { initDB, getShop, saveShop, deleteShop, getAllShops } from "./db.js";
 
 dotenv.config();
 
 const app = express();
+
+/* ======================================================
+   🌍 CORS (MANDATORY FOR SHOPIFY IFRAME)
+====================================================== */
+app.use(
+  cors({
+    origin: "*", // OK for dummy/testing
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
+app.options("*", cors());
+
+/* ======================================================
+   🧠 BODY PARSING
+====================================================== */
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -18,21 +35,19 @@ const {
   PORT = 3000,
 } = process.env;
 
-// Initialize database on startup
+/* ======================================================
+   🗄️ INIT DB
+====================================================== */
 await initDB()
   .then(() => console.log("✅ DB initialized"))
-  .catch(err => console.error("❌ DB init failed", err));
+  .catch((err) => console.error("❌ DB init failed", err));
 
 /* ======================================================
    🔐 HMAC VALIDATION
 ====================================================== */
 function verifyHmac(query) {
   const { hmac, ...rest } = query;
-  
-  if (!hmac) {
-    console.error("❌ No HMAC provided");
-    return false;
-  }
+  if (!hmac) return false;
 
   const message = Object.keys(rest)
     .sort()
@@ -44,13 +59,11 @@ function verifyHmac(query) {
     .update(message)
     .digest("hex");
 
-  const isValid = digest === hmac;
-  console.log(`🔐 HMAC validation: ${isValid ? "✅ PASS" : "❌ FAIL"}`);
-  return isValid;
+  return digest === hmac;
 }
 
 /* ======================================================
-   🎲 NONCE GENERATION & VALIDATION
+   🎲 NONCE
 ====================================================== */
 const nonces = new Map();
 
@@ -58,26 +71,8 @@ function generateNonce() {
   return crypto.randomBytes(16).toString("hex");
 }
 
-function validateNonce(state) {
-  if (!state) return false;
-  const isValid = nonces.has(state);
-  if (isValid) {
-    nonces.delete(state);
-  }
-  return isValid;
-}
-
-setInterval(() => {
-  const now = Date.now();
-  for (const [nonce, timestamp] of nonces.entries()) {
-    if (now - timestamp > 600000) {
-      nonces.delete(nonce);
-    }
-  }
-}, 600000);
-
 /* ======================================================
-   🔒 CSP FOR EMBEDDED APPS
+   🔒 CSP (EMBEDDED SAFE)
 ====================================================== */
 app.use((req, res, next) => {
   res.setHeader(
@@ -88,7 +83,7 @@ app.use((req, res, next) => {
 });
 
 /* ======================================================
-   📊 LOGGING MIDDLEWARE
+   📊 LOGGING
 ====================================================== */
 app.use((req, res, next) => {
   console.log(`${req.method} ${req.path}`, req.query);
@@ -96,51 +91,18 @@ app.use((req, res, next) => {
 });
 
 /* ======================================================
-   🏠 ROOT - Health Check
+   🏠 ROOT (HEALTH CHECK)
 ====================================================== */
 app.get("/", (req, res) => {
-  const { shop, embedded } = req.query;
-
-  if (!shop) {
-    return res.status(400).send("Missing shop parameter");
-  }
-
-  // ✅ If embedded, break out of iframe BEFORE OAuth
-  if (embedded === "1") {
-    return res.send(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <script>
-            window.top.location.href = "/auth?shop=${shop}";
-          </script>
-        </head>
-        <body></body>
-      </html>
-    `);
-  }
-
-  // Non-embedded fallback
-  res.redirect(`/auth?shop=${shop}`);
+  res.send("Shopify Dummy Backend is running");
 });
-
 
 /* ======================================================
    🔑 START OAUTH
 ====================================================== */
 app.get("/auth", (req, res) => {
   const { shop } = req.query;
-  
-  if (!shop) {
-    console.error("❌ Missing shop parameter");
-    return res.status(400).send("Missing shop parameter");
-  }
-
-  const shopRegex = /^[a-zA-Z0-9][a-zA-Z0-9\-]*\.myshopify\.com$/;
-  if (!shopRegex.test(shop)) {
-    console.error("❌ Invalid shop domain:", shop);
-    return res.status(400).send("Invalid shop domain");
-  }
+  if (!shop) return res.status(400).send("Missing shop");
 
   const nonce = generateNonce();
   nonces.set(nonce, Date.now());
@@ -154,7 +116,6 @@ app.get("/auth", (req, res) => {
     `&redirect_uri=${encodeURIComponent(redirectUri)}` +
     `&state=${nonce}`;
 
-  console.log(`🔑 Redirecting to OAuth: ${shop}`);
   res.redirect(installUrl);
 });
 
@@ -162,18 +123,10 @@ app.get("/auth", (req, res) => {
    🔁 OAUTH CALLBACK
 ====================================================== */
 app.get("/auth/callback", async (req, res) => {
-  console.log("🔁 /auth/callback HIT");
-  console.log("QUERY PARAMS:", req.query);
-
-  const { shop, code } = req.query;
-
-  if (!shop || !code) {
-    console.log("❌ Missing shop or code");
-    return res.status(400).send("Missing shop or code");
-  }
+  const { shop, code, host } = req.query;
+  if (!shop || !code) return res.status(400).send("Missing params");
 
   if (!verifyHmac(req.query)) {
-    console.log("❌ HMAC FAILED");
     return res.status(400).send("HMAC failed");
   }
 
@@ -181,104 +134,77 @@ app.get("/auth/callback", async (req, res) => {
     const tokenRes = await axios.post(
       `https://${shop}/admin/oauth/access_token`,
       {
-        client_id: process.env.SHOPIFY_API_KEY,
-        client_secret: process.env.SHOPIFY_API_SECRET,
+        client_id: SHOPIFY_API_KEY,
+        client_secret: SHOPIFY_API_SECRET,
         code,
       }
     );
 
-    console.log("✅ Access token response:", tokenRes.data);
-
     const accessToken = tokenRes.data.access_token;
+    await saveShop(shop, accessToken, SCOPES);
 
-    await saveShop(shop, accessToken, process.env.SCOPES);
-
-    console.log("✅ TOKEN SAVED TO DB FOR:", shop);
-
-    res.redirect(`https://shopify-dummy-frontend.netlify.app/#/screen_initial?shop=${shop}&host=${req.query.host}`);
+    // 🔴 REDIRECT BACK TO FLUTTER UI
+    res.redirect(
+      `https://shopify-dummy-frontend.netlify.app/?shop=${shop}&host=${host}`
+    );
   } catch (err) {
-    console.error("🔥 OAUTH ERROR:", err.response?.data || err.message);
+    console.error("OAuth error:", err.response?.data || err.message);
     res.status(500).send("OAuth failed");
   }
 });
 
-
 /* ======================================================
-   🪝 WEBHOOK REGISTRATION
+   💳 DUMMY PAYMENT ENDPOINT (THIS WAS MISSING)
 ====================================================== */
-async function registerWebhooks(shop, accessToken) {
-  const webhooks = [
-    {
-      topic: "app/uninstalled",
-      address: `${HOST}/webhooks/app_uninstalled`,
-      format: "json",
-    },
-  ];
+app.post("/payment/dummy", async (req, res) => {
+  const { shop, amount } = req.body;
 
-  for (const webhook of webhooks) {
-    try {
-      await axios.post(
-        `https://${shop}/admin/api/2024-01/webhooks.json`,
-        { webhook },
-        {
-          headers: {
-            "X-Shopify-Access-Token": accessToken,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-      console.log(`✅ Registered webhook: ${webhook.topic}`);
-    } catch (err) {
-      console.error(`❌ Failed to register webhook ${webhook.topic}:`, err.response?.data || err.message);
-    }
+  if (!shop || !amount) {
+    return res.status(400).json({
+      success: false,
+      message: "Missing shop or amount",
+    });
   }
-}
+
+  console.log(`💰 Dummy payment | Shop: ${shop} | Amount: ${amount}`);
+
+  return res.status(200).json({
+    success: true,
+    message: "Dummy transaction successful",
+  });
+});
 
 /* ======================================================
-   🪝 WEBHOOK HANDLER - App Uninstalled
+   🪝 WEBHOOK — APP UNINSTALLED
 ====================================================== */
 app.post("/webhooks/app_uninstalled", async (req, res) => {
   const hmac = req.get("X-Shopify-Hmac-Sha256");
   const body = JSON.stringify(req.body);
-  
+
   const digest = crypto
     .createHmac("sha256", SHOPIFY_API_SECRET)
     .update(body, "utf8")
     .digest("base64");
 
   if (digest !== hmac) {
-    console.error("❌ Webhook HMAC validation failed");
     return res.status(403).send("HMAC validation failed");
   }
 
   const shop = req.get("X-Shopify-Shop-Domain");
-  console.log(`🗑️ App uninstalled from: ${shop}`);
-
   await deleteShop(shop);
 
   res.status(200).send("OK");
 });
 
 /* ======================================================
-   🧪 DEBUG ENDPOINTS
+   🧪 DEBUG
 ====================================================== */
 app.get("/debug/shops", async (req, res) => {
-  const shops = await getAllShops();
-  res.json(shops);
-});
-
-app.get("/debug/config", (req, res) => {
-  res.json({
-    host: HOST,
-    api_key: SHOPIFY_API_KEY ? "✓ Set" : "✗ Missing",
-    api_secret: SHOPIFY_API_SECRET ? "✓ Set" : "✗ Missing",
-    scopes: SCOPES,
-    database: process.env.DATABASE_URL ? "✓ Connected" : "✗ Not configured",
-  });
+  res.json(await getAllShops());
 });
 
 /* ======================================================
-   ❌ 404 HANDLER
+   ❌ 404
 ====================================================== */
 app.use((req, res) => {
   res.status(404).send("Not Found");
@@ -291,5 +217,4 @@ app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`🌐 Host: ${HOST}`);
   console.log(`🔑 API Key: ${SHOPIFY_API_KEY ? "✓" : "✗"}`);
-  console.log(`🔐 API Secret: ${SHOPIFY_API_SECRET ? "✓" : "✗"}`);
 });
