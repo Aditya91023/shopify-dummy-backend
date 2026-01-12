@@ -195,7 +195,7 @@ app.get("/auth/callback", async (req, res) => {
 
     console.log("✅ TOKEN SAVED TO DB FOR:", shop);
 
-    res.redirect(`https://${shop}/admin/apps/${process.env.SHOPIFY_API_KEY}`);
+    res.redirect(`https://shopify-dummy-frontend.netlify.app/#/screen_initial?shop=${shop}&host=${req.query.host}`);
   } catch (err) {
     console.error("🔥 OAUTH ERROR:", err.response?.data || err.message);
     res.status(500).send("OAuth failed");

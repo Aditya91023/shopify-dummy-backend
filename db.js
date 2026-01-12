@@ -96,3 +96,7 @@ export async function getAllShops() {
     client.release();
   }
 }
+
+export async function deleteShop(shop) {
+  await pool.query("DELETE FROM shops WHERE shop = $1", [shop]);
+}
