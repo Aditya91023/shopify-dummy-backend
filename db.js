@@ -97,6 +97,4 @@ export async function getAllShops() {
   }
 }
 
-export async function deleteShop(shop) {
-  await pool.query("DELETE FROM shops WHERE shop = $1", [shop]);
-}
+
